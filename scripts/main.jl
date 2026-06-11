@@ -5,6 +5,7 @@ using Random
 using Statistics
 using LinearAlgebra
 using Dates
+using BenchmarkTools
 
 Random.seed!(42)
 
@@ -92,6 +93,179 @@ function model_forward(m, xnode; training=true)
     return h
 end
 
+function benchmark_model_parts()
+    m = make_model()
+
+    batch_idxs = 1:10
+    x, y = get_batch(train_x_f, train_y, collect(batch_idxs))
+
+    xnode = AWID.Node(x)
+    training = true
+
+    println("\n--- model_forward total ---")
+    @btime model_forward($m, $xnode; training=$training)
+
+    println("\n--- conv1 ---")
+    @btime AWID.forward($(m.conv1), $xnode)
+
+    h1 = AWID.forward(m.conv1, xnode)
+
+    println("\n--- relu1 ---")
+    @btime AWID.relu($h1)
+
+    r1 = AWID.relu(h1)
+
+    println("\n--- pool1 ---")
+    @btime AWID.forward($(m.pool1), $r1)
+
+    p1 = AWID.forward(m.pool1, r1)
+
+    println("\n--- conv2 ---")
+    @btime AWID.forward($(m.conv2), $p1)
+
+    h2 = AWID.forward(m.conv2, p1)
+
+    println("\n--- relu2 ---")
+    @btime AWID.relu($h2)
+
+    r2 = AWID.relu(h2)
+
+    println("\n--- pool2 ---")
+    @btime AWID.forward($(m.pool2), $r2)
+
+    p2 = AWID.forward(m.pool2, r2)
+
+    println("\n--- flatten ---")
+    @btime AWID.flatten($p2)
+
+    f = AWID.flatten(p2)
+
+    println("\n--- fc1 ---")
+    @btime AWID.forward($(m.fc1), $f)
+
+    fc1 = AWID.forward(m.fc1, f)
+
+    println("\n--- relu3 ---")
+    @btime AWID.relu($fc1)
+
+    r3 = AWID.relu(fc1)
+
+    println("\n--- dropout ---")
+    @btime AWID.forward($(m.drop1), $r3; training=$training)
+
+    d1 = AWID.forward(m.drop1, r3; training=training)
+
+    println("\n--- fc2 ---")
+    @btime AWID.forward($(m.fc2), $d1)
+
+    return nothing
+end
+
+function benchmark_train_step_parts()
+    m = make_model()
+    batch_idxs = collect(1:10)
+
+    x, y = get_batch(train_x_f, train_y, batch_idxs)
+    xnode = AWID.Node(x)
+
+    println("\n--- forward only ---")
+    @btime model_forward($m, $xnode; training=true)
+
+    logits = model_forward(m, xnode; training=true)
+    loss = AWID.cross_entropy(logits, y)
+
+    println("\n--- backward only ---")
+    @btime AWID.backward!($loss)
+
+    println("\n--- full train step ---")
+    @btime begin
+        AWID.zero_grad!($(m.params))
+        logits = model_forward($m, AWID.Node($x); training=true)
+        loss = AWID.cross_entropy(logits, $y)
+        AWID.backward!(loss)
+        AWID.sgd!($(m.params), 0.01f0)
+    end
+
+    return nothing
+end
+
+function benchmark_backward()
+    m = make_model()
+    batch_idxs = collect(1:10)
+
+    x, y = get_batch(train_x_f, train_y, batch_idxs)
+
+    println("\n--- backward full model ---")
+    @btime begin
+        xnode = AWID.Node($x)
+        logits = model_forward($m, xnode; training=true)
+        loss = AWID.cross_entropy(logits, $y)
+        AWID.backward!(loss)
+    end
+
+    xnode = AWID.Node(x)
+
+    h1 = AWID.forward(m.conv1, xnode)
+    r1 = AWID.relu(h1)
+    p1 = AWID.forward(m.pool1, r1)
+
+    h2 = AWID.forward(m.conv2, p1)
+    r2 = AWID.relu(h2)
+    p2 = AWID.forward(m.pool2, r2)
+
+    f = AWID.flatten(p2)
+    fc1 = AWID.forward(m.fc1, f)
+    r3 = AWID.relu(fc1)
+    d1 = AWID.forward(m.drop1, r3; training=true)
+    fc2 = AWID.forward(m.fc2, d1)
+
+    println("\n--- fc2 backward_fn ---")
+    fill!(fc2.grad, 1f0)
+    @btime $(fc2.backward_fn)()
+
+    println("\n--- dropout backward_fn ---")
+    fill!(d1.grad, 1f0)
+    @btime $(d1.backward_fn)()
+
+    println("\n--- relu3 backward_fn ---")
+    fill!(r3.grad, 1f0)
+    @btime $(r3.backward_fn)()
+
+    println("\n--- fc1 backward_fn ---")
+    fill!(fc1.grad, 1f0)
+    @btime $(fc1.backward_fn)()
+
+    println("\n--- flatten backward_fn ---")
+    fill!(f.grad, 1f0)
+    @btime $(f.backward_fn)()
+
+    println("\n--- pool2 backward_fn ---")
+    fill!(p2.grad, 1f0)
+    @btime $(p2.backward_fn)()
+
+    println("\n--- relu2 backward_fn ---")
+    fill!(r2.grad, 1f0)
+    @btime $(r2.backward_fn)()
+
+    println("\n--- conv2 backward_fn ---")
+    fill!(h2.grad, 1f0)
+    @btime $(h2.backward_fn)()
+
+    println("\n--- pool1 backward_fn ---")
+    fill!(p1.grad, 1f0)
+    @btime $(p1.backward_fn)()
+
+    println("\n--- relu1 backward_fn ---")
+    fill!(r1.grad, 1f0)
+    @btime $(r1.backward_fn)()
+
+    println("\n--- conv1 backward_fn ---")
+    fill!(h1.grad, 1f0)
+    @btime $(h1.backward_fn)()
+
+    return nothing
+end
+
 function batch_step!(batch_idxs, train_x, train_y, model, lr)
     AWID.zero_grad!(model.params)
 
@@ -166,7 +340,7 @@ for epoch in 1:settings.epochs
     for (batch_count, batch) in enumerate(batches)
         batch_step!(batch, train_x_f, train_y, model, settings.lr)
 
-        if batch_count % 500 == 0 || batch_count == total_batches
+        if batch_count % 1000 == 0 || batch_count == total_batches
             println("epoch=$epoch batch=$batch_count/$total_batches")
         end
     end

@@ -1,9 +1,13 @@
 name = "Cafe"
 uuid = "11111111-2222-3333-4444-555555555555"
+version = "1.0.0"
 authors = ["KamilMadrzyk"]
-version = "1.0"
 
 [deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 MLDatasets = "eb30cadb-4394-5ae3-aed4-317e484a6458"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[compat]
+BenchmarkTools = "1.8.0"
