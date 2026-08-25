@@ -1,72 +1,85 @@
-struct MaxPool
-    kh::Int
-    kw::Int
+struct MaxPoolLayer{O, A} <: Operator
+    pool::Tuple{Int, Int}
     stride::Int
+    argmax::A
+    out::GraphNode{O}
 end
 
-MaxPool(kh::Int, kw::Int; stride::Int=kh) = MaxPool(kh, kw, stride)
+function build_layer(bp::MaxPoolSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
+    h, w, c = in_shape
+    ph, pw = bp.pool
+    stride = bp.stride
 
-function forward(l::MaxPool, x::Node{Array{Float32,4}})
-    xval = x.value          ::Array{Float32,4}
-    @assert ndims(xval) == 4 "MaxPool expects HxWxCxB input"
+    oh = fld(h - ph, stride) + 1
+    ow = fld(w - pw, stride) + 1
 
-    h, w, c, bsz  = size(xval)
-    kh, kw, stride = l.kh, l.kw, l.stride
+    out = alloc_act!(pool, oh, ow, c, batch_size)
 
-    oh = fld(h - kh, stride) + 1
-    ow = fld(w - kw, stride) + 1
+    argmax = Array{Int}(undef, oh, ow, c, batch_size)
 
-    out_val  = Array{Float32,4}(undef, oh, ow, c, bsz)
-    maxpos_u = Array{Int,4}(undef, oh, ow, c, bsz)
-    maxpos_v = Array{Int,4}(undef, oh, ow, c, bsz)
+    return MaxPoolLayer(bp.pool, stride, argmax, out), (oh, ow, c)
+end
 
-    @inbounds for n in 1:bsz
-        for ch in 1:c
-            for i in 1:oh
-                hs = (i - 1) * stride + 1
-                for j in 1:ow
-                    ws = (j - 1) * stride + 1
+function primal!(layer::MaxPoolLayer, x::GraphNode)
+    xd = x.data
+    od = layer.out.data
+    argmax = layer.argmax
 
-                    best  = -Inf32
-                    bestu = hs
-                    bestv = ws
+    H, W, C, B = size(xd)
+    OH, OW, _, _ = size(od)
 
-                    for u in 0:kh-1
-                        @simd for v in 0:kw-1
-                            val = xval[hs+u, ws+v, ch, n]
-                            if val > best
-                                best  = val
-                                bestu = hs + u
-                                bestv = ws + v
+    ph, pw = layer.pool
+    stride = layer.stride
+
+    @inbounds for b in 1:B
+        batch_offset = (b - 1) * H * W * C
+
+        for ch in 1:C
+            channel_offset = (ch - 1) * H * W
+
+            for ow in 1:OW
+                w_start = (ow - 1) * stride + 1
+
+                for oh in 1:OH
+                    h_start = (oh - 1) * stride + 1
+
+                    best_val = -Inf32
+                    best_idx = 1
+
+                    for dw in 0:pw-1
+                        iw = w_start + dw
+
+                        for dh in 0:ph-1
+                            ih = h_start + dh
+
+                            val = xd[ih, iw, ch, b]
+
+                            if val > best_val
+                                best_val = val
+
+                                best_idx = ih + (iw - 1) * H + channel_offset + batch_offset
                             end
                         end
                     end
 
-                    out_val[i, j, ch, n] = best
-                    maxpos_u[i, j, ch, n] = bestu
-                    maxpos_v[i, j, ch, n] = bestv
+                    od[oh, ow, ch, b] = best_val
+                    argmax[oh, ow, ch, b] = best_idx
                 end
             end
         end
     end
 
-    out = Node(out_val)
-    out.parents = [x]
+    return nothing
+end
 
-    out.backward_fn = () -> begin
-        xgrad  = x.grad     ::Array{Float32,4}
-        ograd  = out.grad   ::Array{Float32,4}
+function adjoint!(layer::MaxPoolLayer, x::GraphNode)
+    xg = x.grad
+    og = layer.out.grad
+    argmax = layer.argmax
 
-        @inbounds for n in 1:bsz
-            for ch in 1:c
-                for i in 1:oh
-                    @simd for j in 1:ow
-                        xgrad[maxpos_u[i,j,ch,n], maxpos_v[i,j,ch,n], ch, n] += ograd[i, j, ch, n]
-                    end
-                end
-            end
-        end
+    @inbounds for i in eachindex(og)
+        xg[argmax[i]] += og[i]
     end
 
-    return out
+    return nothing
 end

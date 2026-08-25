@@ -1,12 +1,58 @@
 module AWID
 
-include("node.jl")
-include("layer_conv.jl")
+using LinearAlgebra
+using Random
+
+include("memory_pool.jl")
+include("init.jl")
+include("blueprints.jl")
+include("static_chain.jl")
+
 include("layer_dense.jl")
+include("layer_relu_flatten.jl")
 include("layer_dropout.jl")
 include("layer_maxpool.jl")
-include("utils.jl")
+include("layer_conv.jl")
 
-export Node, backward!, zero_grad!, relu, flatten, forward, pad_input, Dense, Conv, MaxPool, Dropout, sgd!, GradientDescent, accumulate!, optimize!, softmax, cross_entropy
+include("loss.jl")
+include("model.jl")
+
+export MemoryPool,
+       GraphNode,
+       alloc_weight!,
+       alloc_act!,
+       zero_w_grad!,
+       zero_a_grad!,
+       zero_grad!,
+       optimize!,
+
+       Operator,
+       Blueprint,
+       Chain,
+       ChainDef,
+       StaticChain,
+       CompiledModel,
+       build_model,
+
+       Dense,
+       Conv,
+       MaxPool,
+       Dropout,
+       Flatten,
+       relu,
+       flatten,
+
+       LogitCrossEntropy,
+       onehot!,
+       loss!,
+       model_output,
+
+       primal!,
+       adjoint!,
+       primal_train!,
+       primal_test!,
+       forward_train!,
+       forward_test!,
+       backward!
 
 end
