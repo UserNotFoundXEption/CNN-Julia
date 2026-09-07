@@ -4,60 +4,63 @@ end
 
 StaticChain(layers...) = StaticChain(layers)
 
-primal_train!(layer, x) = primal!(layer, x)
-primal_test!(layer, x) = primal!(layer, x)
+forward_train!(layer, input_node) = forward!(layer, input_node)
+forward_test!(layer, input_node) = forward!(layer, input_node)
 
-@generated function forward_train!(chain::StaticChain{T}, x::GraphNode) where {T}
-    N = length(T.parameters)
+@generated function forward_train!(chain::StaticChain{T}, input_node::GraphNode) where {T}
+    number_of_layers = length(T.parameters)
 
-    exprs = Expr[
-        :(curr_x = x)
+    expressions = Expr[
+        :(current_input = input_node)
     ]
 
-    for i in 1:N
-        layer_expr = :(getfield(chain.layers, $i))
+    for layer_index in 1:number_of_layers
+        layer_expression = :(getfield(chain.layers, $layer_index))
 
-        push!(exprs, :(primal_train!($layer_expr, curr_x)))
-        push!(exprs, :(curr_x = $layer_expr.out))
+        push!(expressions, :(forward_train!($layer_expression, current_input)))
+        push!(expressions, :(current_input = $layer_expression.output))
     end
 
-    push!(exprs, :(return curr_x))
+    push!(expressions, :(return current_input))
 
-    return Expr(:block, exprs...)
+    return Expr(:block, expressions...)
 end
 
-@generated function forward_test!(chain::StaticChain{T}, x::GraphNode) where {T}
-    N = length(T.parameters)
+@generated function forward_test!(chain::StaticChain{T}, input_node::GraphNode) where {T}
+    number_of_layers = length(T.parameters)
 
-    exprs = Expr[
-        :(curr_x = x)
+    expressions = Expr[
+        :(current_input = input_node)
     ]
 
-    for i in 1:N
-        layer_expr = :(getfield(chain.layers, $i))
+    for layer_index in 1:number_of_layers
+        layer_expression = :(getfield(chain.layers, $layer_index))
 
-        push!(exprs, :(primal_test!($layer_expr, curr_x)))
-        push!(exprs, :(curr_x = $layer_expr.out))
+        push!(expressions, :(forward_test!($layer_expression, current_input)))
+        push!(expressions, :(current_input = $layer_expression.output))
     end
 
-    push!(exprs, :(return curr_x))
+    push!(expressions, :(return current_input))
 
-    return Expr(:block, exprs...)
+    return Expr(:block, expressions...)
 end
 
-@generated function backward!(chain::StaticChain{T}, x::GraphNode) where {T}
-    N = length(T.parameters)
+@generated function backward!(chain::StaticChain{T}, input_node::GraphNode) where {T}
+    number_of_layers = length(T.parameters)
+    expressions = Expr[]
 
-    exprs = Expr[]
+    for layer_index in number_of_layers:-1:1
+        layer_expression = :(getfield(chain.layers, $layer_index))
+        layer_input_expression = if layer_index == 1
+            :(input_node)
+        else
+            :(getfield(chain.layers, $(layer_index - 1)).output)
+        end
 
-    for i in N:-1:1
-        layer_expr = :(getfield(chain.layers, $i))
-        input_expr = i == 1 ? :(x) : :(getfield(chain.layers, $(i - 1)).out)
-
-        push!(exprs, :(adjoint!($layer_expr, $input_expr)))
+        push!(expressions, :(backward!($layer_expression, $layer_input_expression)))
     end
 
-    push!(exprs, :(return nothing))
+    push!(expressions, :(return nothing))
 
-    return Expr(:block, exprs...)
+    return Expr(:block, expressions...)
 end

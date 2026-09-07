@@ -9,37 +9,48 @@ struct CompiledModel{C, P, I, TG, L, IS, OS}
     output_shape::OS
 end
 
-build_layer(bp::Blueprint, pool::MemoryPool, in_shape::Tuple, batch_size::Int, prev_out) =
-    build_layer(bp, pool, in_shape, batch_size)
+build_layer(
+    blueprint::Blueprint,
+    memory_pool::MemoryPool,
+    input_shape::Tuple,
+    batch_size::Int,
+    previous_output,
+) = build_layer(blueprint, memory_pool, input_shape, batch_size)
 
-function build_model(def::ChainDef, input_shape::Tuple; batch_size::Int=1)
-    pool = MemoryPool()
+function build_model(definition::ChainDef, input_shape::Tuple; batch_size::Int=1)
+    memory_pool = MemoryPool()
 
-    input = alloc_act!(pool, input_shape..., batch_size)
+    input_node = alloc_act!(memory_pool, input_shape..., batch_size)
 
     compiled_layers = Any[]
     current_shape = input_shape
-    prev_out = input
+    previous_output = input_node
 
-    for bp in def.blueprints
-        layer, current_shape = build_layer(bp, pool, current_shape, batch_size, prev_out)
+    for blueprint in definition.blueprints
+        layer, current_shape = build_layer(
+            blueprint,
+            memory_pool,
+            current_shape,
+            batch_size,
+            previous_output,
+        )
         push!(compiled_layers, layer)
-        prev_out = layer.out
+        previous_output = layer.output
     end
 
-    num_classes = current_shape[1]
+    number_of_classes = current_shape[1]
 
-    target = alloc_act!(pool, num_classes, batch_size)
-    loss = LogitCrossEntropy(pool, num_classes, batch_size)
+    target_node = alloc_act!(memory_pool, number_of_classes, batch_size)
+    loss_layer = LogitCrossEntropy(memory_pool, number_of_classes, batch_size)
 
     chain = StaticChain(Tuple(compiled_layers))
 
     return CompiledModel(
         chain,
-        pool,
-        input,
-        target,
-        loss,
+        memory_pool,
+        input_node,
+        target_node,
+        loss_layer,
         batch_size,
         input_shape,
         current_shape,
@@ -55,21 +66,21 @@ function forward_test!(model::CompiledModel)
 end
 
 function model_output(model::CompiledModel)
-    return last(model.chain.layers).out
+    return last(model.chain.layers).output
 end
 
-function loss!(model::CompiledModel, logits::GraphNode)
-    return primal!(model.loss, logits, model.target)
+function loss!(model::CompiledModel, logits_node::GraphNode)
+    return forward!(model.loss, logits_node, model.target)
 end
 
 function loss!(model::CompiledModel)
     return loss!(model, model_output(model))
 end
 
-function backward!(model::CompiledModel, logits::GraphNode)
-    model.loss.out.grad[1] = 1f0
+function backward!(model::CompiledModel, logits_node::GraphNode)
+    model.loss.output.grad[1] = 1f0
 
-    adjoint!(model.loss, logits, model.target)
+    backward!(model.loss, logits_node, model.target)
     backward!(model.chain, model.input)
 
     return nothing
@@ -84,7 +95,7 @@ function zero_grad!(model::CompiledModel)
     return nothing
 end
 
-function optimize!(model::CompiledModel, η::Real)
-    optimize!(model.pool, Float32(η))
+function optimize!(model::CompiledModel, learning_rate::Real)
+    optimize!(model.pool, Float32(learning_rate))
     return nothing
 end

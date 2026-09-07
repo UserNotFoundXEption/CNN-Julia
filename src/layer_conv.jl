@@ -1,129 +1,178 @@
 struct ConvLayer{W, BIAS, O, C, OM, GM, DC, XP, DXP} <: Operator
-    w::GraphNode{W}
-    b::GraphNode{BIAS}
-    out::GraphNode{O}
+    weights::GraphNode{W}
+    bias::GraphNode{BIAS}
+    output::GraphNode{O}
 
-    pad::Int
+    padding::Int
     has_bias::Bool
 
-    cols::C        # K × N
-    out_mat::OM    # Cout × N
-    grad_mat::GM   # Cout × N
-    dcols::DC      # K × N
+    input_columns::C
+    output_matrix::OM
+    output_gradient_matrix::GM
+    input_columns_gradient::DC
 
-    xpad::XP       # padded input
-    dxpad::DXP     # padded input gradient
+    padded_input::XP
+    padded_input_gradient::DXP
 end
 
-function build_layer(bp::ConvSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
-    h, w, cin_actual = in_shape
-    kh, kw = bp.filter
-    cout = bp.ch.second
-    pad = bp.pad
+function build_layer(blueprint::ConvSpec, memory_pool::MemoryPool, input_shape::Tuple, batch_size::Int)
+    input_height, input_width, input_channels = input_shape
+    kernel_height, kernel_width = blueprint.kernel_size
+    output_channels = blueprint.channels.second
+    padding = blueprint.padding
 
-    oh = h + 2pad - kh + 1
-    ow = w + 2pad - kw + 1
+    output_height = input_height + 2padding - kernel_height + 1
+    output_width = input_width + 2padding - kernel_width + 1
 
-    # W: kh × kw × Cin × Cout
-    wnode = alloc_weight!(pool, kh, kw, cin_actual, cout)
-    he_normal!(wnode.data; fan_in=kh * kw * cin_actual)
-
-    if bp.bias
-        bnode = alloc_weight!(pool, cout)
-    else
-        bnode = alloc_weight!(pool, 0)
-    end
-
-    out = alloc_act!(pool, oh, ow, cout, batch_size)
-
-    ksize = kh * kw * cin_actual
-    ncols = oh * ow * batch_size
-
-    cols = zeros(Float32, ksize, ncols)
-    out_mat = zeros(Float32, cout, ncols)
-    grad_mat = zeros(Float32, cout, ncols)
-    dcols = zeros(Float32, ksize, ncols)
-
-    xpad = zeros(Float32, h + 2pad, w + 2pad, cin_actual, batch_size)
-    dxpad = zeros(Float32, h + 2pad, w + 2pad, cin_actual, batch_size)
-
-    layer = ConvLayer(
-        wnode,
-        bnode,
-        out,
-        pad,
-        bp.bias,
-        cols,
-        out_mat,
-        grad_mat,
-        dcols,
-        xpad,
-        dxpad,
+    weights_node = alloc_weight!(
+        memory_pool,
+        kernel_height,
+        kernel_width,
+        input_channels,
+        output_channels,
+    )
+    he_normal!(
+        weights_node.data;
+        fan_in=kernel_height * kernel_width * input_channels,
     )
 
-    return layer, (oh, ow, cout)
+    bias_node = if blueprint.bias
+        alloc_weight!(memory_pool, output_channels)
+    else
+        alloc_weight!(memory_pool, 0)
+    end
+
+    output_node = alloc_act!(
+        memory_pool,
+        output_height,
+        output_width,
+        output_channels,
+        batch_size,
+    )
+
+    kernel_volume = kernel_height * kernel_width * input_channels
+    number_of_columns = output_height * output_width * batch_size
+
+    input_columns = zeros(Float32, kernel_volume, number_of_columns)
+    output_matrix = zeros(Float32, output_channels, number_of_columns)
+    output_gradient_matrix = zeros(Float32, output_channels, number_of_columns)
+    input_columns_gradient = zeros(Float32, kernel_volume, number_of_columns)
+
+    padded_input = zeros(
+        Float32,
+        input_height + 2padding,
+        input_width + 2padding,
+        input_channels,
+        batch_size,
+    )
+    padded_input_gradient = zeros(
+        Float32,
+        input_height + 2padding,
+        input_width + 2padding,
+        input_channels,
+        batch_size,
+    )
+
+    layer = ConvLayer(
+        weights_node,
+        bias_node,
+        output_node,
+        padding,
+        blueprint.bias,
+        input_columns,
+        output_matrix,
+        output_gradient_matrix,
+        input_columns_gradient,
+        padded_input,
+        padded_input_gradient,
+    )
+
+    return layer, (output_height, output_width, output_channels)
 end
 
-
-# ========================= padding =========================
-
-function copy_pad!(xpad::AbstractArray{Float32,4}, x::AbstractArray{Float32,4}, pad::Int)
-    if pad == 0
-        copyto!(xpad, x)
+function copy_with_padding!(
+    padded_input::AbstractArray{Float32,4},
+    input_data::AbstractArray{Float32,4},
+    padding::Int,
+)
+    if padding == 0
+        copyto!(padded_input, input_data)
     else
-        fill!(xpad, 0f0)
+        fill!(padded_input, 0f0)
 
-        h, w, _, _ = size(x)
+        input_height, input_width, _, _ = size(input_data)
 
-        @views xpad[pad+1:pad+h, pad+1:pad+w, :, :] .= x
+        @views padded_input[
+            padding+1:padding+input_height,
+            padding+1:padding+input_width,
+            :,
+            :,
+        ] .= input_data
     end
 
     return nothing
 end
 
-function crop_unpad_add!(xgrad::AbstractArray{Float32,4}, dxpad::AbstractArray{Float32,4}, pad::Int)
-    if pad == 0
-        xgrad .+= dxpad
+function add_unpadded_gradient!(
+    input_gradient::AbstractArray{Float32,4},
+    padded_input_gradient::AbstractArray{Float32,4},
+    padding::Int,
+)
+    if padding == 0
+        input_gradient .+= padded_input_gradient
     else
-        h, w, _, _ = size(xgrad)
+        input_height, input_width, _, _ = size(input_gradient)
 
-        @views xgrad .+= dxpad[pad+1:pad+h, pad+1:pad+w, :, :]
+        @views input_gradient .+= padded_input_gradient[
+            padding+1:padding+input_height,
+            padding+1:padding+input_width,
+            :,
+            :,
+        ]
     end
 
     return nothing
 end
-
 
 # ========================= im2col / col2im =========================
 
 function im2col!(
-    cols::Matrix{Float32},
-    xpad::Array{Float32,4},
-    kh::Int,
-    kw::Int,
+    input_columns::Matrix{Float32},
+    padded_input::Array{Float32,4},
+    kernel_height::Int,
+    kernel_width::Int,
 )
-    hp, wp, cin, batch_size = size(xpad)
+    padded_height, padded_width, input_channels, batch_size = size(padded_input)
 
-    oh = hp - kh + 1
-    ow = wp - kw + 1
+    output_height = padded_height - kernel_height + 1
+    output_width = padded_width - kernel_width + 1
 
-    @inbounds for b in 1:batch_size
-        batch_col_offset = (b - 1) * oh * ow
+    @inbounds for batch_index in 1:batch_size
+        batch_column_offset = (batch_index - 1) * output_height * output_width
 
-        for out_w in 1:ow
-            for out_h in 1:oh
-                col = batch_col_offset + (out_w - 1) * oh + out_h
-                row = 1
+        for output_width_index in 1:output_width
+            for output_height_index in 1:output_height
+                column_index = (
+                    batch_column_offset +
+                    (output_width_index - 1) * output_height +
+                    output_height_index
+                )
+                row_index = 1
 
-                for c in 1:cin
-                    for kernel_w in 1:kw
-                        in_w = out_w + kernel_w - 1
+                for channel_index in 1:input_channels
+                    for kernel_width_index in 1:kernel_width
+                        input_width_index = output_width_index + kernel_width_index - 1
 
-                        for kernel_h in 1:kh
-                            in_h = out_h + kernel_h - 1
+                        for kernel_height_index in 1:kernel_height
+                            input_height_index = output_height_index + kernel_height_index - 1
 
-                            cols[row, col] = xpad[in_h, in_w, c, b]
-                            row += 1
+                            input_columns[row_index, column_index] = padded_input[
+                                input_height_index,
+                                input_width_index,
+                                channel_index,
+                                batch_index,
+                            ]
+                            row_index += 1
                         end
                     end
                 end
@@ -135,35 +184,44 @@ function im2col!(
 end
 
 function col2im!(
-    dxpad::Array{Float32,4},
-    dcols::Matrix{Float32},
-    kh::Int,
-    kw::Int,
+    padded_input_gradient::Array{Float32,4},
+    input_columns_gradient::Matrix{Float32},
+    kernel_height::Int,
+    kernel_width::Int,
 )
-    hp, wp, cin, batch_size = size(dxpad)
+    padded_height, padded_width, input_channels, batch_size = size(padded_input_gradient)
 
-    oh = hp - kh + 1
-    ow = wp - kw + 1
+    output_height = padded_height - kernel_height + 1
+    output_width = padded_width - kernel_width + 1
 
-    fill!(dxpad, 0f0)
+    fill!(padded_input_gradient, 0f0)
 
-    @inbounds for b in 1:batch_size
-        batch_col_offset = (b - 1) * oh * ow
+    @inbounds for batch_index in 1:batch_size
+        batch_column_offset = (batch_index - 1) * output_height * output_width
 
-        for out_w in 1:ow
-            for out_h in 1:oh
-                col = batch_col_offset + (out_w - 1) * oh + out_h
-                row = 1
+        for output_width_index in 1:output_width
+            for output_height_index in 1:output_height
+                column_index = (
+                    batch_column_offset +
+                    (output_width_index - 1) * output_height +
+                    output_height_index
+                )
+                row_index = 1
 
-                for c in 1:cin
-                    for kernel_w in 1:kw
-                        in_w = out_w + kernel_w - 1
+                for channel_index in 1:input_channels
+                    for kernel_width_index in 1:kernel_width
+                        input_width_index = output_width_index + kernel_width_index - 1
 
-                        for kernel_h in 1:kh
-                            in_h = out_h + kernel_h - 1
+                        for kernel_height_index in 1:kernel_height
+                            input_height_index = output_height_index + kernel_height_index - 1
 
-                            dxpad[in_h, in_w, c, b] += dcols[row, col]
-                            row += 1
+                            padded_input_gradient[
+                                input_height_index,
+                                input_width_index,
+                                channel_index,
+                                batch_index,
+                            ] += input_columns_gradient[row_index, column_index]
+                            row_index += 1
                         end
                     end
                 end
@@ -174,24 +232,32 @@ function col2im!(
     return nothing
 end
 
-
 # ========================= matrix <-> tensor =========================
 
-function mat_to_4d!(
-    out::AbstractArray{Float32,4},
-    mat::Matrix{Float32},
+function matrix_to_4d!(
+    output_data::AbstractArray{Float32,4},
+    output_matrix::Matrix{Float32},
 )
-    oh, ow, cout, batch_size = size(out)
+    output_height, output_width, output_channels, batch_size = size(output_data)
 
-    @inbounds for b in 1:batch_size
-        batch_col_offset = (b - 1) * oh * ow
+    @inbounds for batch_index in 1:batch_size
+        batch_column_offset = (batch_index - 1) * output_height * output_width
 
-        for out_w in 1:ow
-            for out_h in 1:oh
-                col = batch_col_offset + (out_w - 1) * oh + out_h
+        for output_width_index in 1:output_width
+            for output_height_index in 1:output_height
+                column_index = (
+                    batch_column_offset +
+                    (output_width_index - 1) * output_height +
+                    output_height_index
+                )
 
-                for c in 1:cout
-                    out[out_h, out_w, c, b] = mat[c, col]
+                for channel_index in 1:output_channels
+                    output_data[
+                        output_height_index,
+                        output_width_index,
+                        channel_index,
+                        batch_index,
+                    ] = output_matrix[channel_index, column_index]
                 end
             end
         end
@@ -200,21 +266,30 @@ function mat_to_4d!(
     return nothing
 end
 
-function grad_to_mat!(
-    mat::Matrix{Float32},
-    grad::AbstractArray{Float32,4},
+function gradient_to_matrix!(
+    output_gradient_matrix::Matrix{Float32},
+    output_gradient::AbstractArray{Float32,4},
 )
-    oh, ow, cout, batch_size = size(grad)
+    output_height, output_width, output_channels, batch_size = size(output_gradient)
 
-    @inbounds for b in 1:batch_size
-        batch_col_offset = (b - 1) * oh * ow
+    @inbounds for batch_index in 1:batch_size
+        batch_column_offset = (batch_index - 1) * output_height * output_width
 
-        for out_w in 1:ow
-            for out_h in 1:oh
-                col = batch_col_offset + (out_w - 1) * oh + out_h
+        for output_width_index in 1:output_width
+            for output_height_index in 1:output_height
+                column_index = (
+                    batch_column_offset +
+                    (output_width_index - 1) * output_height +
+                    output_height_index
+                )
 
-                for c in 1:cout
-                    mat[c, col] = grad[out_h, out_w, c, b]
+                for channel_index in 1:output_channels
+                    output_gradient_matrix[channel_index, column_index] = output_gradient[
+                        output_height_index,
+                        output_width_index,
+                        channel_index,
+                        batch_index,
+                    ]
                 end
             end
         end
@@ -222,43 +297,51 @@ function grad_to_mat!(
 
     return nothing
 end
-
 
 # ========================= Conv forward / backward =========================
 
-function primal!(layer::ConvLayer, x::GraphNode)
-    xd = x.data
-    wd = layer.w.data
-    od = layer.out.data
+function forward!(layer::ConvLayer, input_node::GraphNode)
+    input_data = input_node.data
+    weight_data = layer.weights.data
+    output_data = layer.output.data
 
-    kh, kw, cin, cout = size(wd)
+    kernel_height, kernel_width, input_channels, output_channels = size(weight_data)
 
-    copy_pad!(layer.xpad, xd, layer.pad)
+    copy_with_padding!(layer.padded_input, input_data, layer.padding)
+    im2col!(layer.input_columns, layer.padded_input, kernel_height, kernel_width)
 
-    im2col!(layer.cols, layer.xpad, kh, kw)
+    # Flatten convolution filters to a matrix:
+    # weight_matrix: kernel_volume × output_channels
+    weight_matrix = reshape(
+        weight_data,
+        kernel_height * kernel_width * input_channels,
+        output_channels,
+    )
 
-    # W_flat: K × Cout
-    W_flat = reshape(wd, kh * kw * cin, cout)
-
-    # out_mat = W_flat' * cols
+    # output_matrix = weight_matrix' * input_columns
     # shapes:
-    #   W_flat'  = Cout × K
-    #   cols     = K × N
-    #   out_mat  = Cout × N
-    mul!(layer.out_mat, transpose(W_flat), layer.cols)
+    #   weight_matrix' = output_channels × kernel_volume
+    #   input_columns  = kernel_volume × number_of_columns
+    #   output_matrix  = output_channels × number_of_columns
+    mul!(layer.output_matrix, transpose(weight_matrix), layer.input_columns)
 
-    mat_to_4d!(od, layer.out_mat)
+    matrix_to_4d!(output_data, layer.output_matrix)
 
     if layer.has_bias
-        bd = layer.b.data
+        bias_data = layer.bias.data
 
-        @inbounds for b in axes(od, 4)
-            for c in axes(od, 3)
-                bias = bd[c]
+        @inbounds for batch_index in axes(output_data, 4)
+            for channel_index in axes(output_data, 3)
+                channel_bias = bias_data[channel_index]
 
-                for w in axes(od, 2)
-                    for h in axes(od, 1)
-                        od[h, w, c, b] += bias
+                for width_index in axes(output_data, 2)
+                    for height_index in axes(output_data, 1)
+                        output_data[
+                            height_index,
+                            width_index,
+                            channel_index,
+                            batch_index,
+                        ] += channel_bias
                     end
                 end
             end
@@ -268,48 +351,66 @@ function primal!(layer::ConvLayer, x::GraphNode)
     return nothing
 end
 
-function adjoint!(layer::ConvLayer, x::GraphNode)
-    wd = layer.w.data
-    wg = layer.w.grad
+function backward!(layer::ConvLayer, input_node::GraphNode)
+    weight_data = layer.weights.data
+    weight_gradient = layer.weights.grad
 
-    kh, kw, cin, cout = size(wd)
+    kernel_height, kernel_width, input_channels, output_channels = size(weight_data)
 
-    W_flat = reshape(wd, kh * kw * cin, cout)
-    Wg_flat = reshape(wg, kh * kw * cin, cout)
+    weight_matrix = reshape(
+        weight_data,
+        kernel_height * kernel_width * input_channels,
+        output_channels,
+    )
+    weight_gradient_matrix = reshape(
+        weight_gradient,
+        kernel_height * kernel_width * input_channels,
+        output_channels,
+    )
 
-    # grad_mat: Cout × N
-    grad_to_mat!(layer.grad_mat, layer.out.grad)
+    gradient_to_matrix!(layer.output_gradient_matrix, layer.output.grad)
 
-    # dW += cols * grad_mat'
-    # shapes:
-    #   cols       = K × N
-    #   grad_mat'  = N × Cout
-    #   Wg_flat    = K × Cout
-    mul!(Wg_flat, layer.cols, transpose(layer.grad_mat), 1f0, 1f0)
+    # dW += input_columns * output_gradient_matrix'
+    mul!(
+        weight_gradient_matrix,
+        layer.input_columns,
+        transpose(layer.output_gradient_matrix),
+        1f0,
+        1f0,
+    )
 
     if layer.has_bias
-        bg = layer.b.grad
-        gm = layer.grad_mat
+        bias_gradient = layer.bias.grad
+        output_gradient_matrix = layer.output_gradient_matrix
 
-        @inbounds for c in 1:cout
-            acc = 0f0
-            for j in axes(gm, 2)
-                acc += gm[c, j]
+        @inbounds for channel_index in 1:output_channels
+            channel_gradient_sum = 0f0
+            for column_index in axes(output_gradient_matrix, 2)
+                channel_gradient_sum += output_gradient_matrix[channel_index, column_index]
             end
-            bg[c] += acc
+            bias_gradient[channel_index] += channel_gradient_sum
         end
     end
 
-    # dcols = W_flat * grad_mat
-    # shapes:
-    #   W_flat    = K × Cout
-    #   grad_mat  = Cout × N
-    #   dcols     = K × N
-    mul!(layer.dcols, W_flat, layer.grad_mat)
+    # Gradient with respect to im2col representation of the input.
+    mul!(
+        layer.input_columns_gradient,
+        weight_matrix,
+        layer.output_gradient_matrix,
+    )
 
-    col2im!(layer.dxpad, layer.dcols, kh, kw)
+    col2im!(
+        layer.padded_input_gradient,
+        layer.input_columns_gradient,
+        kernel_height,
+        kernel_width,
+    )
 
-    crop_unpad_add!(x.grad, layer.dxpad, layer.pad)
+    add_unpadded_gradient!(
+        input_node.grad,
+        layer.padded_input_gradient,
+        layer.padding,
+    )
 
     return nothing
 end

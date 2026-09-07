@@ -2,24 +2,24 @@ abstract type Operator end
 abstract type Blueprint end
 
 struct DenseSpec <: Blueprint
-    in_out::Pair{Int, Int}
+    dimensions::Pair{Int, Int}
     bias::Bool
 end
 
 struct ConvSpec <: Blueprint
-    filter::Tuple{Int, Int}
-    ch::Pair{Int, Int}
-    pad::Int
+    kernel_size::Tuple{Int, Int}
+    channels::Pair{Int, Int}
+    padding::Int
     bias::Bool
 end
 
 struct MaxPoolSpec <: Blueprint
-    pool::Tuple{Int, Int}
+    pool_size::Tuple{Int, Int}
     stride::Int
 end
 
 struct DropoutSpec <: Blueprint
-    p::Float32
+    drop_probability::Float32
 end
 
 struct ReLUSpec <: Blueprint end
@@ -28,20 +28,26 @@ struct FlattenSpec <: Blueprint end
 const relu = ReLUSpec()
 const flatten = FlattenSpec()
 
-Dense(pair::Pair{Int, Int}; bias::Bool=true) =
-    DenseSpec(pair, bias)
+Dense(dimensions::Pair{Int, Int}; bias::Bool=true) =
+    DenseSpec(dimensions, bias)
 
-Dense(pair::Pair{Int, Int}, ::ReLUSpec; bias::Bool=true) =
-    (DenseSpec(pair, bias), ReLUSpec())
+Dense(dimensions::Pair{Int, Int}, ::ReLUSpec; bias::Bool=true) =
+    (DenseSpec(dimensions, bias), ReLUSpec())
 
-Conv(filter::Tuple{Int, Int}, ch::Pair{Int, Int}; pad::Int=0, bias::Bool=false) =
-    ConvSpec(filter, ch, pad, bias)
+function Conv(
+    kernel_size::Tuple{Int, Int},
+    channels::Pair{Int, Int};
+    padding::Int=0,
+    bias::Bool=false,
+)
+    return ConvSpec(kernel_size, channels, padding, bias)
+end
 
-MaxPool(pool::Tuple{Int, Int}; stride::Int=pool[1]) =
-    MaxPoolSpec(pool, stride)
+MaxPool(pool_size::Tuple{Int, Int}; stride::Int=pool_size[1]) =
+    MaxPoolSpec(pool_size, stride)
 
-Dropout(p::Real) =
-    DropoutSpec(Float32(p))
+Dropout(drop_probability::Real) =
+    DropoutSpec(Float32(drop_probability))
 
 Flatten() =
     FlattenSpec()
@@ -50,16 +56,16 @@ struct ChainDef{T <: Tuple}
     blueprints::T
 end
 
-function Chain(args...)
-    flat = Any[]
+function Chain(layer_definitions...)
+    flattened_blueprints = Any[]
 
-    for a in args
-        if a isa Tuple
-            append!(flat, a)
+    for definition in layer_definitions
+        if definition isa Tuple
+            append!(flattened_blueprints, definition)
         else
-            push!(flat, a)
+            push!(flattened_blueprints, definition)
         end
     end
 
-    return ChainDef(Tuple(flat))
+    return ChainDef(Tuple(flattened_blueprints))
 end

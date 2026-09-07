@@ -1,40 +1,45 @@
+
+
 struct DenseLayer{W, B, O} <: Operator
-    w::GraphNode{W}
-    b::GraphNode{B}
-    out::GraphNode{O}
+    weights::GraphNode{W}
+    bias::GraphNode{B}
+    output::GraphNode{O}
     has_bias::Bool
 end
 
-function build_layer(bp::DenseSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
-    declared_in = bp.in_out.first
-    outsize = bp.in_out.second
+function build_layer(blueprint::DenseSpec, memory_pool::MemoryPool, input_shape::Tuple, batch_size::Int)
+    declared_input_size = blueprint.dimensions.first
+    output_size = blueprint.dimensions.second
+    actual_input_size = prod(input_shape)
 
-    actual_in = prod(in_shape)
+    # actual_input_size is kept explicitly because it is useful for validation/debugging.
+    # The matrix dimensions in mul! will still reject an incompatible declaration.
+    _ = actual_input_size
 
-    w = alloc_weight!(pool, outsize, declared_in)
-    he_normal!(w.data; fan_in=declared_in)
+    weights_node = alloc_weight!(memory_pool, output_size, declared_input_size)
+    he_normal!(weights_node.data; fan_in=declared_input_size)
 
-    if bp.bias
-        b = alloc_weight!(pool, outsize)
+    bias_node = if blueprint.bias
+        alloc_weight!(memory_pool, output_size)
     else
-        b = alloc_weight!(pool, 0)
+        alloc_weight!(memory_pool, 0)
     end
 
-    out = alloc_act!(pool, outsize, batch_size)
+    output_node = alloc_act!(memory_pool, output_size, batch_size)
 
-    return DenseLayer(w, b, out, bp.bias), (outsize,)
+    return DenseLayer(weights_node, bias_node, output_node, blueprint.bias), (output_size,)
 end
 
-function primal!(layer::DenseLayer, x::GraphNode)
-    mul!(layer.out.data, layer.w.data, x.data)
+function forward!(layer::DenseLayer, input_node::GraphNode)
+    mul!(layer.output.data, layer.weights.data, input_node.data)
 
     if layer.has_bias
-        od = layer.out.data
-        bd = layer.b.data
+        output_data = layer.output.data
+        bias_data = layer.bias.data
 
-        @inbounds for batch in axes(od, 2)
-            for i in axes(od, 1)
-                od[i, batch] += bd[i]
+        @inbounds for batch_index in axes(output_data, 2)
+            for output_index in axes(output_data, 1)
+                output_data[output_index, batch_index] += bias_data[output_index]
             end
         end
     end
@@ -42,21 +47,35 @@ function primal!(layer::DenseLayer, x::GraphNode)
     return nothing
 end
 
-function adjoint!(layer::DenseLayer, x::GraphNode)
-    mul!(layer.w.grad, layer.out.grad, x.data', 1f0, 1f0)
+function backward!(layer::DenseLayer, input_node::GraphNode)
+    # dW += dY * X'
+    mul!(
+        layer.weights.grad,
+        layer.output.grad,
+        input_node.data',
+        1f0,
+        1f0,
+    )
 
     if layer.has_bias
-        bg = layer.b.grad
-        og = layer.out.grad
+        bias_gradient = layer.bias.grad
+        output_gradient = layer.output.grad
 
-        @inbounds for batch in axes(og, 2)
-            for i in axes(og, 1)
-                bg[i] += og[i, batch]
+        @inbounds for batch_index in axes(output_gradient, 2)
+            for output_index in axes(output_gradient, 1)
+                bias_gradient[output_index] += output_gradient[output_index, batch_index]
             end
         end
     end
 
-    mul!(x.grad, layer.w.data', layer.out.grad, 1f0, 1f0)
+    # dX += W' * dY
+    mul!(
+        input_node.grad,
+        layer.weights.data',
+        layer.output.grad,
+        1f0,
+        1f0,
+    )
 
     return nothing
 end

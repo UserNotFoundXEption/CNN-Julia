@@ -1,56 +1,60 @@
 struct DropoutLayer{R, O} <: Operator
-    p::Float32
-    rand_buf::R
-    out::GraphNode{O}
+    drop_probability::Float32
+    mask_buffer::R
+    output::GraphNode{O}
 end
 
-function build_layer(bp::DropoutSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
-    rand_buf = zeros(Float32, in_shape..., batch_size)
-    out = alloc_act!(pool, in_shape..., batch_size)
+function build_layer(blueprint::DropoutSpec, memory_pool::MemoryPool, input_shape::Tuple, batch_size::Int)
+    mask_buffer = zeros(Float32, input_shape..., batch_size)
+    output_node = alloc_act!(memory_pool, input_shape..., batch_size)
 
-    return DropoutLayer(bp.p, rand_buf, out), in_shape
+    return DropoutLayer(blueprint.drop_probability, mask_buffer, output_node), input_shape
 end
 
-function primal_train!(layer::DropoutLayer, x::GraphNode)
-    xd = x.data
-    od = layer.out.data
-    mask = layer.rand_buf
-    p = layer.p
+function forward_train!(layer::DropoutLayer, input_node::GraphNode)
+    input_data = input_node.data
+    output_data = layer.output.data
+    mask_buffer = layer.mask_buffer
+    drop_probability = layer.drop_probability
 
-    if p <= 0f0
-        copyto!(od, xd)
-        fill!(mask, 1f0)
+    if drop_probability <= 0f0
+        copyto!(output_data, input_data)
+        fill!(mask_buffer, 1f0)
         return nothing
     end
 
-    keep_prob = 1f0 - p
-    scale = 1f0 / keep_prob
+    keep_probability = 1f0 - drop_probability
+    inverse_keep_probability = 1f0 / keep_probability
 
-    rand!(mask)
+    rand!(mask_buffer)
 
-    @inbounds for i in eachindex(od)
-        m = ifelse(mask[i] > p, scale, 0f0)
-        mask[i] = m
-        od[i] = xd[i] * m
+    @inbounds for element_index in eachindex(output_data)
+        mask_value = ifelse(
+            mask_buffer[element_index] > drop_probability,
+            inverse_keep_probability,
+            0f0,
+        )
+        mask_buffer[element_index] = mask_value
+        output_data[element_index] = input_data[element_index] * mask_value
     end
 
     return nothing
 end
 
-function primal_test!(layer::DropoutLayer, x::GraphNode)
-    copyto!(layer.out.data, x.data)
-    fill!(layer.rand_buf, 1f0)
+function forward_test!(layer::DropoutLayer, input_node::GraphNode)
+    copyto!(layer.output.data, input_node.data)
+    fill!(layer.mask_buffer, 1f0)
 
     return nothing
 end
 
-function adjoint!(layer::DropoutLayer, x::GraphNode)
-    mask = layer.rand_buf
-    og = layer.out.grad
-    xg = x.grad
+function backward!(layer::DropoutLayer, input_node::GraphNode)
+    mask_buffer = layer.mask_buffer
+    output_gradient = layer.output.grad
+    input_gradient = input_node.grad
 
-    @inbounds for i in eachindex(xg)
-        xg[i] += og[i] * mask[i]
+    @inbounds for element_index in eachindex(input_gradient)
+        input_gradient[element_index] += output_gradient[element_index] * mask_buffer[element_index]
     end
 
     return nothing

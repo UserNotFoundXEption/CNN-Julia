@@ -1,11 +1,11 @@
 mutable struct MemoryPool
     weights::Vector{Float32}
-    w_grad::Vector{Float32}
-    w_offset::Int
+    weight_gradients::Vector{Float32}
+    weight_offset::Int
 
-    acts::Vector{Float32}
-    a_grad::Vector{Float32}
-    a_offset::Int
+    activations::Vector{Float32}
+    activation_gradients::Vector{Float32}
+    activation_offset::Int
 end
 
 MemoryPool() = MemoryPool(
@@ -22,59 +22,68 @@ struct GraphNode{T}
     grad::T
 end
 
-function alloc_weight!(pool::MemoryPool, dims...)
-    len = prod(dims)
-    start = pool.w_offset
-    stop = start + len - 1
+function alloc_weight!(memory_pool::MemoryPool, dimensions...)
+    number_of_values = prod(dimensions)
+    start_index = memory_pool.weight_offset
+    end_index = start_index + number_of_values - 1
 
-    pool.w_offset += len
+    memory_pool.weight_offset += number_of_values
 
-    append!(pool.weights, zeros(Float32, len))
-    append!(pool.w_grad, zeros(Float32, len))
+    append!(memory_pool.weights, zeros(Float32, number_of_values))
+    append!(memory_pool.weight_gradients, zeros(Float32, number_of_values))
 
-    data = reshape(view(pool.weights, start:stop), dims)
-    grad = reshape(view(pool.w_grad, start:stop), dims)
+    data = reshape(view(memory_pool.weights, start_index:end_index), dimensions)
+    gradient = reshape(
+        view(memory_pool.weight_gradients, start_index:end_index),
+        dimensions,
+    )
 
-    return GraphNode(data, grad)
+    return GraphNode(data, gradient)
 end
 
-function alloc_act!(pool::MemoryPool, dims...)
-    len = prod(dims)
-    start = pool.a_offset
-    stop = start + len - 1
+function alloc_act!(memory_pool::MemoryPool, dimensions...)
+    number_of_values = prod(dimensions)
+    start_index = memory_pool.activation_offset
+    end_index = start_index + number_of_values - 1
 
-    pool.a_offset += len
+    memory_pool.activation_offset += number_of_values
 
-    append!(pool.acts, zeros(Float32, len))
-    append!(pool.a_grad, zeros(Float32, len))
+    append!(memory_pool.activations, zeros(Float32, number_of_values))
+    append!(memory_pool.activation_gradients, zeros(Float32, number_of_values))
 
-    data = reshape(view(pool.acts, start:stop), dims)
-    grad = reshape(view(pool.a_grad, start:stop), dims)
+    data = reshape(view(memory_pool.activations, start_index:end_index), dimensions)
+    gradient = reshape(
+        view(memory_pool.activation_gradients, start_index:end_index),
+        dimensions,
+    )
 
-    return GraphNode(data, grad)
+    return GraphNode(data, gradient)
 end
 
-function zero_w_grad!(pool::MemoryPool)
-    fill!(pool.w_grad, 0.0f0)
+function zero_w_grad!(memory_pool::MemoryPool)
+    fill!(memory_pool.weight_gradients, 0.0f0)
     return nothing
 end
 
-function zero_a_grad!(pool::MemoryPool)
-    fill!(pool.a_grad, 0.0f0)
+function zero_a_grad!(memory_pool::MemoryPool)
+    fill!(memory_pool.activation_gradients, 0.0f0)
     return nothing
 end
 
-function zero_grad!(pool::MemoryPool)
-    zero_w_grad!(pool)
-    zero_a_grad!(pool)
+function zero_grad!(memory_pool::MemoryPool)
+    zero_w_grad!(memory_pool)
+    zero_a_grad!(memory_pool)
     return nothing
 end
 
-function optimize!(pool::MemoryPool, η::Float32)
-    @inbounds for i in eachindex(pool.weights)
-        pool.weights[i] -= η * pool.w_grad[i]
+function optimize!(memory_pool::MemoryPool, learning_rate::Float32)
+    @inbounds for parameter_index in eachindex(memory_pool.weights)
+        memory_pool.weights[parameter_index] -= (
+            learning_rate * memory_pool.weight_gradients[parameter_index]
+        )
     end
     return nothing
 end
 
-optimize!(pool::MemoryPool, η::Real) = optimize!(pool, Float32(η))
+optimize!(memory_pool::MemoryPool, learning_rate::Real) =
+    optimize!(memory_pool, Float32(learning_rate))

@@ -1,82 +1,90 @@
 struct ReLULayer{O} <: Operator
-    out::GraphNode{O}
+    output::GraphNode{O}
 end
 
-function build_layer(::ReLUSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
-    out = alloc_act!(pool, in_shape..., batch_size)
-    return ReLULayer(out), in_shape
+function build_layer(::ReLUSpec, memory_pool::MemoryPool, input_shape::Tuple, batch_size::Int)
+    output_node = alloc_act!(memory_pool, input_shape..., batch_size)
+    return ReLULayer(output_node), input_shape
 end
 
-function primal!(layer::ReLULayer, x::GraphNode)
-    xd = x.data
-    od = layer.out.data
+function forward!(layer::ReLULayer, input_node::GraphNode)
+    input_data = input_node.data
+    output_data = layer.output.data
 
-    @inbounds for i in eachindex(od)
-        od[i] = max(0f0, xd[i])
+    @inbounds for element_index in eachindex(output_data)
+        output_data[element_index] = max(0f0, input_data[element_index])
     end
 
     return nothing
 end
 
-function adjoint!(layer::ReLULayer, x::GraphNode)
-    xd = x.data
-    og = layer.out.grad
-    xg = x.grad
+function backward!(layer::ReLULayer, input_node::GraphNode)
+    input_data = input_node.data
+    output_gradient = layer.output.grad
+    input_gradient = input_node.grad
 
-    @inbounds for i in eachindex(xg)
-        xg[i] += ifelse(xd[i] > 0f0, og[i], 0f0)
+    @inbounds for element_index in eachindex(input_gradient)
+        input_gradient[element_index] += ifelse(
+            input_data[element_index] > 0f0,
+            output_gradient[element_index],
+            0f0,
+        )
     end
 
     return nothing
 end
-
 
 struct FlattenLayer{O} <: Operator
-    out::GraphNode{O}
+    output::GraphNode{O}
     aliased::Bool
 end
 
-function build_layer(::FlattenSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int)
-    flat_size = prod(in_shape)
+function build_layer(::FlattenSpec, memory_pool::MemoryPool, input_shape::Tuple, batch_size::Int)
+    flattened_size = prod(input_shape)
+    output_node = alloc_act!(memory_pool, flattened_size, batch_size)
 
-    out = alloc_act!(pool, flat_size, batch_size)
-
-    return FlattenLayer(out, false), (flat_size,)
+    return FlattenLayer(output_node, false), (flattened_size,)
 end
 
-function build_layer(::FlattenSpec, pool::MemoryPool, in_shape::Tuple, batch_size::Int, prev_out::GraphNode)
-    flat_size = prod(in_shape)
+function build_layer(
+    ::FlattenSpec,
+    memory_pool::MemoryPool,
+    input_shape::Tuple,
+    batch_size::Int,
+    previous_output::GraphNode,
+)
+    flattened_size = prod(input_shape)
 
-    out = GraphNode(
-        reshape(prev_out.data, flat_size, batch_size),
-        reshape(prev_out.grad, flat_size, batch_size),
+    output_node = GraphNode(
+        reshape(previous_output.data, flattened_size, batch_size),
+        reshape(previous_output.grad, flattened_size, batch_size),
     )
 
-    return FlattenLayer(out, true), (flat_size,)
+    return FlattenLayer(output_node, true), (flattened_size,)
 end
 
-function primal!(layer::FlattenLayer, x::GraphNode)
-    # Jeśli Flatten jest aliasem poprzedniego bufora, nie trzeba nic kopiować.
+function forward!(layer::FlattenLayer, input_node::GraphNode)
+    # If Flatten aliases the previous buffer, no data copy is needed.
     if layer.aliased
         return nothing
     end
 
-    copyto!(layer.out.data, x.data)
+    copyto!(layer.output.data, input_node.data)
 
     return nothing
 end
 
-function adjoint!(layer::FlattenLayer, x::GraphNode)
-    # Jeśli data i grad są aliasami, gradient już trafia do tego samego bufora.
+function backward!(layer::FlattenLayer, input_node::GraphNode)
+    # If data and gradients are aliases, the gradient already reaches the same buffer.
     if layer.aliased
         return nothing
     end
 
-    og = layer.out.grad
-    xg = x.grad
+    output_gradient = layer.output.grad
+    input_gradient = input_node.grad
 
-    @inbounds for i in eachindex(xg)
-        xg[i] += og[i]
+    @inbounds for element_index in eachindex(input_gradient)
+        input_gradient[element_index] += output_gradient[element_index]
     end
 
     return nothing

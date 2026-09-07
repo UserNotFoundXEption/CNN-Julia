@@ -47,10 +47,7 @@ export MemoryPool,
        loss!,
        model_output,
 
-       primal!,
-       adjoint!,
-       primal_train!,
-       primal_test!,
+       forward!,
        forward_train!,
        forward_test!,
        backward!
