@@ -62,7 +62,7 @@ function forward!(
         end
     end
 
-    layer.output.data[1] = total_loss / Float32(batch_size)
+    layer.output.data[1] = total_loss
 
     return layer.output.data[1]
 end
@@ -77,7 +77,7 @@ function backward!(
     probabilities = layer.probabilities.data
 
     number_of_classes, batch_size = size(logits_gradient)
-    gradient_scale = layer.output.grad[1] / Float32(batch_size)
+    gradient_scale = layer.output.grad[1]
 
     @inbounds for batch_index in 1:batch_size
         for class_index in 1:number_of_classes

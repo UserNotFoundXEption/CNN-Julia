@@ -95,7 +95,7 @@ function zero_grad!(model::CompiledModel)
     return nothing
 end
 
-function optimize!(model::CompiledModel, learning_rate::Real)
+function optimize!(model::CompiledModel, learning_rate::Float32)
     optimize!(model.pool, Float32(learning_rate))
     return nothing
 end
