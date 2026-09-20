@@ -310,19 +310,12 @@ function forward!(layer::ConvLayer, input_node::GraphNode)
     copy_with_padding!(layer.padded_input, input_data, layer.padding)
     im2col!(layer.input_columns, layer.padded_input, kernel_height, kernel_width)
 
-    # Flatten convolution filters to a matrix:
-    # weight_matrix: kernel_volume × output_channels
     weight_matrix = reshape(
         weight_data,
         kernel_height * kernel_width * input_channels,
         output_channels,
     )
 
-    # output_matrix = weight_matrix' * input_columns
-    # shapes:
-    #   weight_matrix' = output_channels × kernel_volume
-    #   input_columns  = kernel_volume × number_of_columns
-    #   output_matrix  = output_channels × number_of_columns
     mul!(layer.output_matrix, transpose(weight_matrix), layer.input_columns)
 
     matrix_to_4d!(output_data, layer.output_matrix)
@@ -370,7 +363,6 @@ function backward!(layer::ConvLayer, input_node::GraphNode)
 
     gradient_to_matrix!(layer.output_gradient_matrix, layer.output.grad)
 
-    # dW += input_columns * output_gradient_matrix'
     mul!(
         weight_gradient_matrix,
         layer.input_columns,
@@ -392,7 +384,6 @@ function backward!(layer::ConvLayer, input_node::GraphNode)
         end
     end
 
-    # Gradient with respect to im2col representation of the input.
     mul!(
         layer.input_columns_gradient,
         weight_matrix,

@@ -12,8 +12,6 @@ function build_layer(blueprint::DenseSpec, memory_pool::MemoryPool, input_shape:
     output_size = blueprint.dimensions.second
     actual_input_size = prod(input_shape)
 
-    # actual_input_size is kept explicitly because it is useful for validation/debugging.
-    # The matrix dimensions in mul! will still reject an incompatible declaration.
     _ = actual_input_size
 
     weights_node = alloc_weight!(memory_pool, output_size, declared_input_size)
@@ -48,7 +46,6 @@ function forward!(layer::DenseLayer, input_node::GraphNode)
 end
 
 function backward!(layer::DenseLayer, input_node::GraphNode)
-    # dW += dY * X'
     mul!(
         layer.weights.grad,
         layer.output.grad,
@@ -68,7 +65,6 @@ function backward!(layer::DenseLayer, input_node::GraphNode)
         end
     end
 
-    # dX += W' * dY
     mul!(
         input_node.grad,
         layer.weights.data',

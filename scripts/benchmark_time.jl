@@ -152,8 +152,6 @@ function benchmark_layer!(
             output_shape=string((output_shape..., batch_size)),
             minimum_time_ns=forward_minimum.time,
             median_time_ns=forward_median.time,
-            memory_bytes=forward_median.memory,
-            allocations=forward_median.allocs,
         ),
     )
 
@@ -166,8 +164,6 @@ function benchmark_layer!(
             output_shape=string((output_shape..., batch_size)),
             minimum_time_ns=backward_minimum.time,
             median_time_ns=backward_median.time,
-            memory_bytes=backward_median.memory,
-            allocations=backward_median.allocs,
         ),
     )
 
@@ -310,8 +306,6 @@ function benchmark_loss!(
             output_shape="(1,)",
             minimum_time_ns=forward_minimum.time,
             median_time_ns=forward_median.time,
-            memory_bytes=forward_median.memory,
-            allocations=forward_median.allocs,
         ),
     )
 
@@ -324,8 +318,6 @@ function benchmark_loss!(
             output_shape="(1,)",
             minimum_time_ns=backward_minimum.time,
             median_time_ns=backward_median.time,
-            memory_bytes=backward_median.memory,
-            allocations=backward_median.allocs,
         ),
     )
 
@@ -345,7 +337,7 @@ end
 
 results = []
 
-println("AWID - benchmark każdej warstwy")
+println("Time benchmark")
 println("batch_size      = ", BATCH_SIZE)
 println("BLAS threads    = ", BLAS.get_num_threads())
 println("samples (max)   = ", BENCHMARK_SAMPLES)
@@ -422,45 +414,29 @@ benchmark_loss!(
 
 println()
 println("=================================================================================================================")
-println("WYNIKI")
+println("RESULTS")
 println("=================================================================================================================")
 
 @printf(
-    "%-22s %-10s %-18s %-18s %12s %12s %12s %10s\n",
-    "warstwa",
-    "operacja",
+    "%-22s %-10s %-18s %-18s %12s %12s \n",
+    "layer",
+    "operation",
     "input",
     "output",
     "minimum",
-    "mediana",
-    "alokacje",
-    "allocs",
+    "mean",
 )
 
 println(repeat("-", 118))
 
 for result in results
     @printf(
-        "%-22s %-10s %-18s %-18s %12s %12s %12s %10d\n",
+        "%-22s %-10s %-18s %-18s %12s %12s \n",
         result.layer,
         result.operation,
         result.input_shape,
         result.output_shape,
         format_time_nanoseconds(result.minimum_time_ns),
         format_time_nanoseconds(result.median_time_ns),
-        format_bytes(result.memory_bytes),
-        result.allocations,
     )
 end
-
-println()
-println("Uwagi:")
-println("1. 'minimum' i 'mediana' dotyczą samego forward!/backward!.")
-println("2. Przy backward przygotowanie stanu (zero_grad + forward + ustawienie dY)")
-println("   jest w setup= i NIE jest wliczane do wyniku.")
-println("3. Kolumna 'alokacje' to pamięć zaalokowana podczas pojedynczej operacji,")
-println("   a nie całkowity RAM zajmowany przez model.")
-println("4. Flatten w pełnym modelu jest aliasem poprzedniego bufora, więc jego")
-println("   forward/backward powinien być praktycznie darmowy.")
-println("5. Dropout forward_train! zawiera generowanie liczb losowych; to jest")
-println("   celowo częścią mierzonej operacji treningowej.")

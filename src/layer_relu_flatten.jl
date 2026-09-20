@@ -64,7 +64,6 @@ function build_layer(
 end
 
 function forward!(layer::FlattenLayer, input_node::GraphNode)
-    # If Flatten aliases the previous buffer, no data copy is needed.
     if layer.aliased
         return nothing
     end
@@ -75,7 +74,6 @@ function forward!(layer::FlattenLayer, input_node::GraphNode)
 end
 
 function backward!(layer::FlattenLayer, input_node::GraphNode)
-    # If data and gradients are aliases, the gradient already reaches the same buffer.
     if layer.aliased
         return nothing
     end

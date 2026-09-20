@@ -117,14 +117,14 @@ results = [
 
 println()
 println("==============================================================")
-println("ALOKACJE PODCZAS BUDOWANIA WARSTW")
+println("LAYER BUILD MEMORY ALLOCATIONS")
 println("==============================================================")
 
 @printf(
     "%-24s %16s %14s\n",
-    "warstwa",
-    "pamiec",
-    "alokacje",
+    "layer",
+    "memory",
+    "allocations",
 )
 
 println(repeat("-", 58))
